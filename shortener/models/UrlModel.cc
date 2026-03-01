@@ -73,9 +73,17 @@ optional<string> UrlModel::getOriginalUrl(const string& shortCode)
 {
     try
     {
-        auto client = app().getDbClient("default");
+        
+        auto cached = redis->execCommandSync<string>("GET %s", shortCode.c_str());
 
-        LOG_INFO << "Looking up short code: " << shortCode;
+        if (!cached.empty()) {
+            LOG_INFO << "Cache hit for short code: " << shortCode;
+            return cached;
+        }
+        
+        LOG_INFO << "Cache miss, querying database for short code: " << shortCode;
+        
+        auto client = app().getDbClient("default");
 
         auto result = client->execSqlSync(
             "SELECT original_url, expires_at "
@@ -101,7 +109,14 @@ optional<string> UrlModel::getOriginalUrl(const string& shortCode)
 
         string originalUrl = result[0]["original_url"].as<string>();
 
-        LOG_INFO << "Found URL: " << originalUrl;
+        LOG_INFO << "Found URL and inserted in Redis cache: " << originalUrl;
+
+        // Insert into Redis cache
+        redis->execCommandSync<void>(
+            "SETEX %s 3600 %s",
+            shortCode.c_str(),
+            originalUrl.c_str()
+        );
 
         return originalUrl;
     }
