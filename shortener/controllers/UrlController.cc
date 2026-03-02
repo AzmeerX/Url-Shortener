@@ -2,10 +2,36 @@
 #include "models/UrlModel.h"
 #include <iostream>
 #include <optional>
+#include <regex>
+#include <unordered_set>
 #include <drogon/drogon.h>
 
 using namespace drogon;
 using namespace std;
+
+namespace {
+optional<string> extractHostFromUrl(const string &url) {
+    static const regex hostRegex(R"(^https?://([^/]+))", regex::icase);
+    smatch match;
+    if (regex_search(url, match, hostRegex) && match.size() > 1) {
+        return match[1].str();
+    }
+    return nullopt;
+}
+
+optional<string> extractPathFromUrl(const string &url) {
+    static const regex pathRegex(R"(^https?://[^/]+/([^?#]+))", regex::icase);
+    smatch match;
+    if (regex_search(url, match, pathRegex) && match.size() > 1) {
+        return match[1].str();
+    }
+    return nullopt;
+}
+
+bool isReservedPath(const string &path) {
+    return path == "shorten" || path == "metrics" || path.rfind("analytics/", 0) == 0;
+}
+}
 
 // POST /shorten
 void UrlController::shortenUrl(const HttpRequestPtr& req, function<void (const HttpResponsePtr &)> &&callback)
@@ -31,9 +57,70 @@ void UrlController::shortenUrl(const HttpRequestPtr& req, function<void (const H
         return;
     }
 
+    string host = req->getHeader("Host");
+    if (auto targetHost = extractHostFromUrl(longUrl); targetHost && !host.empty() && *targetHost == host) {
+        auto path = extractPathFromUrl(longUrl);
+        if (!path || path->empty() || isReservedPath(*path)) {
+            auto resp = HttpResponse::newHttpResponse();
+            resp->setStatusCode(k400BadRequest);
+            resp->setBody("Cannot shorten this shortener endpoint URL");
+            callback(resp);
+            return;
+        }
+
+        string currentCode = *path;
+        unordered_set<string> visitedCodes;
+        const int maxHops = 10;
+        bool resolved = false;
+
+        for (int hop = 0; hop < maxHops; ++hop) {
+            if (!visitedCodes.insert(currentCode).second) {
+                auto resp = HttpResponse::newHttpResponse();
+                resp->setStatusCode(k400BadRequest);
+                resp->setBody("Redirect loop detected in referenced short URL");
+                callback(resp);
+                return;
+            }
+
+            auto mapped = UrlModel::getOriginalUrl(currentCode);
+            if (!mapped) {
+                auto resp = HttpResponse::newNotFoundResponse();
+                resp->setBody("Referenced short URL not found");
+                callback(resp);
+                return;
+            }
+
+            if (auto nestedHost = extractHostFromUrl(*mapped); nestedHost && *nestedHost == host) {
+                auto nestedPath = extractPathFromUrl(*mapped);
+                if (!nestedPath || nestedPath->empty() || isReservedPath(*nestedPath)) {
+                    auto resp = HttpResponse::newHttpResponse();
+                    resp->setStatusCode(k400BadRequest);
+                    resp->setBody("Referenced short URL resolves to an invalid internal path");
+                    callback(resp);
+                    return;
+                }
+                currentCode = *nestedPath;
+                continue;
+            }
+
+            longUrl = *mapped;
+            resolved = true;
+            break;
+        }
+
+        if (!resolved) {
+            auto resp = HttpResponse::newHttpResponse();
+            resp->setStatusCode(k400BadRequest);
+            resp->setBody("Too many chained short URL redirects");
+            callback(resp);
+            return;
+        }
+    }
+
     string shortCode = UrlModel::generateShortCode(longUrl);
 
-    if (!UrlModel::saveUrlMapping(shortCode, longUrl))
+    auto savedShortCode = UrlModel::saveUrlMapping(shortCode, longUrl);
+    if (!savedShortCode)
     {
         auto resp = HttpResponse::newHttpResponse();
         resp->setStatusCode(k500InternalServerError);
@@ -43,14 +130,13 @@ void UrlController::shortenUrl(const HttpRequestPtr& req, function<void (const H
     }
 
     // Get host from request header
-    string host = req->getHeader("Host");
     if (host.empty()) {
         host = "short.url"; // fallback
     }
 
     Json::Value jsonResp;
-    jsonResp["shortUrl"] = "http://" + host + "/" + shortCode;
-    jsonResp["shortCode"] = shortCode;
+    jsonResp["shortUrl"] = "http://" + host + "/" + *savedShortCode;
+    jsonResp["shortCode"] = *savedShortCode;
 
     auto resp = HttpResponse::newHttpJsonResponse(jsonResp);
     callback(resp);
@@ -62,10 +148,27 @@ void UrlController::redirectToOriginal(const HttpRequestPtr& req, function<void 
     auto originalUrl = UrlModel::getOriginalUrl(short_code);
     
     if(!originalUrl) {
+        LOG_WARN << "No URL found for short code: " << short_code;
         auto resp = HttpResponse::newNotFoundResponse();
         resp->setBody("Short URL not found");
         callback(resp);
         return;
+    }
+
+    LOG_INFO << "Redirecting " << short_code << " to: " << *originalUrl;
+
+    string host = req->getHeader("Host");
+    if (!host.empty()) {
+        const string sameHttpUrl = "http://" + host + "/" + short_code;
+        const string sameHttpsUrl = "https://" + host + "/" + short_code;
+        if (*originalUrl == sameHttpUrl || *originalUrl == sameHttpsUrl) {
+            LOG_ERROR << "Detected self-referential redirect loop for short code: " << short_code;
+            auto resp = HttpResponse::newHttpResponse();
+            resp->setStatusCode(k500InternalServerError);
+            resp->setBody("Redirect loop detected for this short URL");
+            callback(resp);
+            return;
+        }
     }
 
     // Check expiration by querying the database directly in the controller
@@ -98,7 +201,9 @@ void UrlController::redirectToOriginal(const HttpRequestPtr& req, function<void 
         // Continue anyway if expiration check fails
     }
 
-    auto resp = HttpResponse::newRedirectionResponse(*originalUrl);
+    auto resp = HttpResponse::newHttpResponse();
+    resp->setStatusCode(drogon::k302Found);
+    resp->addHeader("Location", *originalUrl);
     callback(resp);
 }
 

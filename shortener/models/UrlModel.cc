@@ -2,6 +2,7 @@
 #include <drogon/drogon.h>
 #include <functional> 
 #include <cstdint>
+#include <chrono>
 #include <regex>
 
 using namespace drogon;
@@ -24,13 +25,29 @@ string UrlModel::generateShortCode(const string& longUrl) {
 }
 
 // Insert mapping in DB (with collision retry)
-bool UrlModel::saveUrlMapping(const string& shortCode, const string& longUrl) {
+optional<string> UrlModel::saveUrlMapping(const string& shortCode, const string& longUrl) {
     if (!isValidUrl(longUrl)) {
         LOG_ERROR << "Invalid URL: " << longUrl;
-        return false;
+        return nullopt;
     }
 
-    const int MAX_RETRIES = 3;
+    try {
+        auto client = app().getDbClient("default");
+        auto existing = client->execSqlSync(
+            "SELECT short_code FROM url_mapping WHERE original_url=$1 ORDER BY created_at ASC LIMIT 1",
+            longUrl
+        );
+
+        if (!existing.empty()) {
+            const string existingCode = existing[0]["short_code"].as<string>();
+            LOG_INFO << "Reusing existing short code for URL: " << existingCode;
+            return existingCode;
+        }
+    } catch (const exception& e) {
+        LOG_WARN << "Existing mapping lookup failed, continuing with insert flow: " << e.what();
+    }
+
+    const int MAX_RETRIES = 8;
     string currentShortCode = shortCode;
 
     for (int attempt = 0; attempt < MAX_RETRIES; ++attempt) {
@@ -49,7 +66,7 @@ bool UrlModel::saveUrlMapping(const string& shortCode, const string& longUrl) {
 
             if (!result.empty()) {
                 LOG_INFO << "Successfully saved short code: " << currentShortCode;
-                return true;
+                return currentShortCode;
             }
 
             // Collision detected, generate new code and retry
@@ -59,13 +76,14 @@ bool UrlModel::saveUrlMapping(const string& shortCode, const string& longUrl) {
         catch(const exception& e) {
             LOG_ERROR << "DB insert attempt " << (attempt + 1) << " failed: " << e.what();
             if (attempt < MAX_RETRIES - 1) {
-                currentShortCode = generateShortCode(longUrl + to_string(attempt + 1));
+                const auto nonce = chrono::high_resolution_clock::now().time_since_epoch().count();
+                currentShortCode = generateShortCode(longUrl + ":" + to_string(attempt + 1) + ":" + to_string(nonce));
             }
         }
     }
 
     LOG_ERROR << "Failed to save URL after " << MAX_RETRIES << " attempts";
-    return false;
+    return nullopt;
 }
 
 // Fetch original URL with expiration check
@@ -82,12 +100,12 @@ optional<string> UrlModel::getOriginalUrl(const string& shortCode)
                 }
                 return ""; 
             },
-            "GET ?",
-            shortCode
+            "GET %s",
+            shortCode.c_str()
         );
 
-        if (!cached.empty()) {
-            LOG_INFO << "Cache hit for short code: " << shortCode;
+        if (!cached.empty() && isValidUrl(cached)) {
+            LOG_INFO << "Cache hit for short code: " << shortCode << " -> " << cached;
             return cached;
         }
         
@@ -107,15 +125,16 @@ optional<string> UrlModel::getOriginalUrl(const string& shortCode)
         }
 
         string originalUrl = result[0]["original_url"].as<string>();
+        LOG_INFO << "Found in DB - shortCode: " << shortCode << " -> " << originalUrl;
 
         redis->execCommandSync<int>(
             [](const nosql::RedisResult &) { return 0; },
-            "SETEX ? 3600 ?",
-            shortCode,
-            originalUrl
+            "SETEX %s 3600 %s",
+            shortCode.c_str(),
+            originalUrl.c_str()
         );
 
-        LOG_INFO << "Found URL and cached in Redis: " << originalUrl;
+        LOG_INFO << "Cached in Redis: " << shortCode << " -> " << originalUrl;
         return originalUrl;
     }
     catch (const std::exception& e)

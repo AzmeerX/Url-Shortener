@@ -9,7 +9,7 @@ class UrlModel {
 public:
     static string generateShortCode(const string& longUrl);
 
-    static bool saveUrlMapping(const string& shortCode, const string& longUrl);
+    static optional<string> saveUrlMapping(const string& shortCode, const string& longUrl);
 
     static optional<string> getOriginalUrl(const string& shortCode);
 
