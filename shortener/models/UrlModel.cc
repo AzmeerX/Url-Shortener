@@ -71,10 +71,20 @@ bool UrlModel::saveUrlMapping(const string& shortCode, const string& longUrl) {
 // Fetch original URL with expiration check
 optional<string> UrlModel::getOriginalUrl(const string& shortCode)
 {
-    try
-    {
+    try {   
+        nosql::RedisClientPtr redis = app().getRedisClient();
         
-        auto cached = redis->execCommandSync<string>("GET %s", shortCode.c_str());
+        // 1. Check Redis cache first
+        auto cached = redis->execCommandSync<string>(
+            [](const nosql::RedisResult &r) -> string {
+                if (r.type() == nosql::RedisResultType::kString) {
+                    return r.asString();
+                }
+                return ""; 
+            },
+            "GET ?",
+            shortCode
+        );
 
         if (!cached.empty()) {
             LOG_INFO << "Cache hit for short code: " << shortCode;
@@ -82,47 +92,35 @@ optional<string> UrlModel::getOriginalUrl(const string& shortCode)
         }
         
         LOG_INFO << "Cache miss, querying database for short code: " << shortCode;
-        
         auto client = app().getDbClient("default");
 
+        // 2. Query database for original URL
         auto result = client->execSqlSync(
             "SELECT original_url, expires_at "
             "FROM url_mapping WHERE short_code=$1",
             shortCode
         );
 
-        LOG_INFO << "Query returned " << result.size() << " rows";
-
         if (result.empty()) {
             LOG_WARN << "No URL found for short code: " << shortCode;
             return nullopt;
         }
 
-        // Check expiration
-        if (!result[0]["expires_at"].isNull()) {
-            string expiresAt = result[0]["expires_at"].as<string>();
-            LOG_INFO << "URL expires at: " << expiresAt;
-            // Simple comparison - if expires_at < NOW(), it's expired
-            // This is handled at HTTP response with 410 Gone status
-            // For now, return the URL and let controller handle expiration check
-        }
-
         string originalUrl = result[0]["original_url"].as<string>();
 
-        LOG_INFO << "Found URL and inserted in Redis cache: " << originalUrl;
-
-        // Insert into Redis cache
-        redis->execCommandSync<void>(
-            "SETEX %s 3600 %s",
-            shortCode.c_str(),
-            originalUrl.c_str()
+        redis->execCommandSync<int>(
+            [](const nosql::RedisResult &) { return 0; },
+            "SETEX ? 3600 ?",
+            shortCode,
+            originalUrl
         );
 
+        LOG_INFO << "Found URL and cached in Redis: " << originalUrl;
         return originalUrl;
     }
-    catch (const exception& e)
+    catch (const std::exception& e)
     {
-        LOG_ERROR << "DB fetch failed: " << e.what();
+        LOG_ERROR << "Data fetch error: " << e.what();
         return nullopt;
     }
 }
