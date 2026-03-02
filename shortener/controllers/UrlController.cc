@@ -1,6 +1,7 @@
 #include "UrlController.h"
 #include "models/UrlModel.h"
 #include <iostream>
+#include <cstdint>
 #include <optional>
 #include <regex>
 #include <unordered_set>
@@ -47,6 +48,27 @@ void UrlController::shortenUrl(const HttpRequestPtr& req, function<void (const H
     }
 
     string longUrl = (*json)["long_url"].asString();
+    optional<int64_t> ttlSeconds = nullopt;
+
+    if (json->isMember("ttl_seconds")) {
+        if (!(*json)["ttl_seconds"].isInt64()) {
+            auto resp = HttpResponse::newHttpResponse();
+            resp->setStatusCode(k400BadRequest);
+            resp->setBody("Invalid ttl_seconds: must be a positive integer");
+            callback(resp);
+            return;
+        }
+
+        const auto ttl = (*json)["ttl_seconds"].asInt64();
+        if (ttl <= 0 || ttl > 315360000) {
+            auto resp = HttpResponse::newHttpResponse();
+            resp->setStatusCode(k400BadRequest);
+            resp->setBody("Invalid ttl_seconds: allowed range is 1..315360000");
+            callback(resp);
+            return;
+        }
+        ttlSeconds = ttl;
+    }
 
     // Validate URL
     if (!UrlModel::isValidUrl(longUrl)) {
@@ -119,7 +141,7 @@ void UrlController::shortenUrl(const HttpRequestPtr& req, function<void (const H
 
     string shortCode = UrlModel::generateShortCode(longUrl);
 
-    auto savedShortCode = UrlModel::saveUrlMapping(shortCode, longUrl);
+    auto savedShortCode = UrlModel::saveUrlMapping(shortCode, longUrl, ttlSeconds);
     if (!savedShortCode)
     {
         auto resp = HttpResponse::newHttpResponse();
@@ -137,6 +159,9 @@ void UrlController::shortenUrl(const HttpRequestPtr& req, function<void (const H
     Json::Value jsonResp;
     jsonResp["shortUrl"] = "http://" + host + "/" + *savedShortCode;
     jsonResp["shortCode"] = *savedShortCode;
+    if (ttlSeconds) {
+        jsonResp["ttlSeconds"] = static_cast<Json::Int64>(*ttlSeconds);
+    }
 
     auto resp = HttpResponse::newHttpJsonResponse(jsonResp);
     callback(resp);
@@ -200,6 +225,8 @@ void UrlController::redirectToOriginal(const HttpRequestPtr& req, function<void 
         LOG_ERROR << "Expiration check failed: " << e.what();
         // Continue anyway if expiration check fails
     }
+
+    UrlModel::incrementClickCount(short_code);
 
     auto resp = HttpResponse::newHttpResponse();
     resp->setStatusCode(drogon::k302Found);

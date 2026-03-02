@@ -9,9 +9,11 @@ class UrlModel {
 public:
     static string generateShortCode(const string& longUrl);
 
-    static optional<string> saveUrlMapping(const string& shortCode, const string& longUrl);
+    static optional<string> saveUrlMapping(const string& shortCode, const string& longUrl, const optional<int64_t>& ttlSeconds = nullopt);
 
     static optional<string> getOriginalUrl(const string& shortCode);
+
+    static bool incrementClickCount(const string& shortCode);
 
     static bool isValidUrl(const string& url);
 

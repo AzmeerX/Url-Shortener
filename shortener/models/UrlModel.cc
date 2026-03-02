@@ -25,26 +25,30 @@ string UrlModel::generateShortCode(const string& longUrl) {
 }
 
 // Insert mapping in DB (with collision retry)
-optional<string> UrlModel::saveUrlMapping(const string& shortCode, const string& longUrl) {
+optional<string> UrlModel::saveUrlMapping(const string& shortCode, const string& longUrl, const optional<int64_t>& ttlSeconds) {
     if (!isValidUrl(longUrl)) {
         LOG_ERROR << "Invalid URL: " << longUrl;
         return nullopt;
     }
 
-    try {
-        auto client = app().getDbClient("default");
-        auto existing = client->execSqlSync(
-            "SELECT short_code FROM url_mapping WHERE original_url=$1 ORDER BY created_at ASC LIMIT 1",
-            longUrl
-        );
+    if (!ttlSeconds) {
+        try {
+            auto client = app().getDbClient("default");
+            auto existing = client->execSqlSync(
+                "SELECT short_code FROM url_mapping "
+                "WHERE original_url=$1 AND (expires_at IS NULL OR expires_at > NOW()) "
+                "ORDER BY created_at ASC LIMIT 1",
+                longUrl
+            );
 
-        if (!existing.empty()) {
-            const string existingCode = existing[0]["short_code"].as<string>();
-            LOG_INFO << "Reusing existing short code for URL: " << existingCode;
-            return existingCode;
+            if (!existing.empty()) {
+                const string existingCode = existing[0]["short_code"].as<string>();
+                LOG_INFO << "Reusing existing short code for URL: " << existingCode;
+                return existingCode;
+            }
+        } catch (const exception& e) {
+            LOG_WARN << "Existing mapping lookup failed, continuing with insert flow: " << e.what();
         }
-    } catch (const exception& e) {
-        LOG_WARN << "Existing mapping lookup failed, continuing with insert flow: " << e.what();
     }
 
     const int MAX_RETRIES = 8;
@@ -56,17 +60,35 @@ optional<string> UrlModel::saveUrlMapping(const string& shortCode, const string&
 
             LOG_INFO << "Saving (attempt " << (attempt + 1) << "): shortCode=" << currentShortCode << ", longUrl=" << longUrl;
 
-            auto result = client->execSqlSync(
-                "INSERT INTO url_mapping(short_code, original_url) "
-                "VALUES($1, $2) "
-                "RETURNING short_code",
-                currentShortCode,
-                longUrl
-            );
+            if (ttlSeconds) {
+                const string ttlInterval = to_string(*ttlSeconds) + " seconds";
 
-            if (!result.empty()) {
-                LOG_INFO << "Successfully saved short code: " << currentShortCode;
-                return currentShortCode;
+                auto result = client->execSqlSync(
+                    "INSERT INTO url_mapping(short_code, original_url, expires_at) "
+                    "VALUES($1, $2, NOW() + $3::interval) "
+                    "RETURNING short_code",
+                    currentShortCode,
+                    longUrl,
+                    ttlInterval
+                );
+
+                if (!result.empty()) {
+                    LOG_INFO << "Successfully saved short code: " << currentShortCode;
+                    return currentShortCode;
+                }
+            } else {
+                auto result = client->execSqlSync(
+                    "INSERT INTO url_mapping(short_code, original_url) "
+                    "VALUES($1, $2) "
+                    "RETURNING short_code",
+                    currentShortCode,
+                    longUrl
+                );
+
+                if (!result.empty()) {
+                    LOG_INFO << "Successfully saved short code: " << currentShortCode;
+                    return currentShortCode;
+                }
             }
 
             // Collision detected, generate new code and retry
@@ -84,6 +106,20 @@ optional<string> UrlModel::saveUrlMapping(const string& shortCode, const string&
 
     LOG_ERROR << "Failed to save URL after " << MAX_RETRIES << " attempts";
     return nullopt;
+}
+
+bool UrlModel::incrementClickCount(const string& shortCode) {
+    try {
+        auto client = app().getDbClient("default");
+        client->execSqlSync(
+            "UPDATE url_mapping SET click_count = click_count + 1 WHERE short_code=$1",
+            shortCode
+        );
+        return true;
+    } catch (const exception& e) {
+        LOG_ERROR << "Failed to increment click count for " << shortCode << ": " << e.what();
+        return false;
+    }
 }
 
 // Fetch original URL with expiration check
