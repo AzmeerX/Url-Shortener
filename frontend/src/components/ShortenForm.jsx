@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { shortenUrl } from "../api";
+import AnalyticsPanel from "./AnalyticsPanel";
 import "./ShortenForm.css";
 
 export default function ShortenForm() {
@@ -71,6 +72,8 @@ export default function ShortenForm() {
                     </div>
                 </div>
             )}
+
+            <AnalyticsPanel shortUrl={shortUrl} />
         </div>
     );
 }

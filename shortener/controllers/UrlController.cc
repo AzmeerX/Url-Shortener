@@ -11,32 +11,65 @@ using namespace drogon;
 using namespace std;
 
 namespace {
-optional<string> extractHostFromUrl(const string &url) {
-    static const regex hostRegex(R"(^https?://([^/]+))", regex::icase);
-    smatch match;
-    if (regex_search(url, match, hostRegex) && match.size() > 1) {
-        return match[1].str();
+    optional<string> extractHostFromUrl(const string &url) {
+        static const regex hostRegex(R"(^https?://([^/]+))", regex::icase);
+        smatch match;
+        if (regex_search(url, match, hostRegex) && match.size() > 1) {
+            return match[1].str();
+        }
+        return nullopt;
     }
-    return nullopt;
-}
 
-optional<string> extractPathFromUrl(const string &url) {
-    static const regex pathRegex(R"(^https?://[^/]+/([^?#]+))", regex::icase);
-    smatch match;
-    if (regex_search(url, match, pathRegex) && match.size() > 1) {
-        return match[1].str();
+    optional<string> extractPathFromUrl(const string &url) {
+        static const regex pathRegex(R"(^https?://[^/]+/([^?#]+))", regex::icase);
+        smatch match;
+        if (regex_search(url, match, pathRegex) && match.size() > 1) {
+            return match[1].str();
+        }
+        return nullopt;
     }
-    return nullopt;
-}
 
-bool isReservedPath(const string &path) {
-    return path == "shorten" || path == "metrics" || path.rfind("analytics/", 0) == 0;
-}
+    bool isReservedPath(const string &path) {
+        return path == "shorten" || path == "metrics" || path.rfind("analytics/", 0) == 0;
+    }
 }
 
 // POST /shorten
 void UrlController::shortenUrl(const HttpRequestPtr& req, function<void (const HttpResponsePtr &)> &&callback)
 {
+    auto clientIp = req->peerAddr().toIp();
+    auto redis = app().getRedisClient();
+
+    string rateKey = "rate:" + clientIp;
+
+    int requestCount = redis->execCommandSync<int>(
+        [](const nosql::RedisResult &r) -> int {
+            if (r.type() == nosql::RedisResultType::kInteger)
+                return r.asInteger();
+            return 0;
+        },
+        "INCR ?",
+        rateKey
+    );
+
+    // If first request, set expiration
+    if (requestCount == 1) {
+        redis->execCommandSync<int>(
+            [](const nosql::RedisResult &) { return 0; },
+            "EXPIRE ? 60",
+            rateKey
+        );
+    }
+
+    // Block if exceeded
+    if (requestCount > 50) {
+        auto resp = HttpResponse::newHttpResponse();
+        resp->setStatusCode(k429TooManyRequests);
+        resp->setBody("Rate limit exceeded. Try again later.");
+        callback(resp);
+        return;
+    }
+
     auto json = req->getJsonObject();
     if (!json || !json->isMember("long_url"))
     {
