@@ -33,6 +33,38 @@
     font-weight: 400;
 }
 
+.session-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding: 10px 12px;
+    border: 1px solid #d8e7ef;
+    background: #f7fcff;
+    border-radius: 12px;
+}
+
+.session-email {
+    color: #15435d;
+    font-size: 0.92rem;
+    font-weight: 600;
+    word-break: break-word;
+}
+
+.logout-button {
+    border: none;
+    border-radius: 9px;
+    padding: 8px 12px;
+    background: #0f3a53;
+    color: #fff;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.logout-button:hover {
+    background: #0c2f44;
+}
+
 @keyframes slideUp {
     from {
         opacity: 0;
@@ -51,5 +83,15 @@
 
     .app-title {
         font-size: 2rem;
+    }
+
+    .session-row {
+        flex-direction: column;
+        gap: 10px;
+        align-items: flex-start;
+    }
+
+    .logout-button {
+        width: 100%;
     }
 }

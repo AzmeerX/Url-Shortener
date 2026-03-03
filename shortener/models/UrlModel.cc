@@ -25,7 +25,10 @@ string UrlModel::generateShortCode(const string& longUrl) {
 }
 
 // Insert mapping in DB (with collision retry)
-optional<string> UrlModel::saveUrlMapping(const string& shortCode, const string& longUrl, const optional<int64_t>& ttlSeconds) {
+optional<string> UrlModel::saveUrlMapping(const string& shortCode,
+                                          const string& longUrl,
+                                          const optional<int64_t>& ttlSeconds,
+                                          const optional<int>& userId) {
     if (!isValidUrl(longUrl)) {
         LOG_ERROR << "Invalid URL: " << longUrl;
         return nullopt;
@@ -34,17 +37,33 @@ optional<string> UrlModel::saveUrlMapping(const string& shortCode, const string&
     if (!ttlSeconds) {
         try {
             auto client = app().getDbClient("default");
-            auto existing = client->execSqlSync(
-                "SELECT short_code FROM url_mapping "
-                "WHERE original_url=$1 AND (expires_at IS NULL OR expires_at > NOW()) "
-                "ORDER BY created_at ASC LIMIT 1",
-                longUrl
-            );
+            if (userId) {
+                auto existing = client->execSqlSync(
+                    "SELECT short_code FROM url_mapping "
+                    "WHERE original_url=$1 AND user_id=$2 AND (expires_at IS NULL OR expires_at > NOW()) "
+                    "ORDER BY created_at ASC LIMIT 1",
+                    longUrl,
+                    *userId
+                );
 
-            if (!existing.empty()) {
-                const string existingCode = existing[0]["short_code"].as<string>();
-                LOG_INFO << "Reusing existing short code for URL: " << existingCode;
-                return existingCode;
+                if (!existing.empty()) {
+                    const string existingCode = existing[0]["short_code"].as<string>();
+                    LOG_INFO << "Reusing existing short code for URL: " << existingCode;
+                    return existingCode;
+                }
+            } else {
+                auto existing = client->execSqlSync(
+                    "SELECT short_code FROM url_mapping "
+                    "WHERE original_url=$1 AND user_id IS NULL AND (expires_at IS NULL OR expires_at > NOW()) "
+                    "ORDER BY created_at ASC LIMIT 1",
+                    longUrl
+                );
+
+                if (!existing.empty()) {
+                    const string existingCode = existing[0]["short_code"].as<string>();
+                    LOG_INFO << "Reusing existing short code for URL: " << existingCode;
+                    return existingCode;
+                }
             }
         } catch (const exception& e) {
             LOG_WARN << "Existing mapping lookup failed, continuing with insert flow: " << e.what();
@@ -63,31 +82,63 @@ optional<string> UrlModel::saveUrlMapping(const string& shortCode, const string&
             if (ttlSeconds) {
                 const string ttlInterval = to_string(*ttlSeconds) + " seconds";
 
-                auto result = client->execSqlSync(
-                    "INSERT INTO url_mapping(short_code, original_url, expires_at) "
-                    "VALUES($1, $2, NOW() + $3::interval) "
-                    "RETURNING short_code",
-                    currentShortCode,
-                    longUrl,
-                    ttlInterval
-                );
+                if (userId) {
+                    auto result = client->execSqlSync(
+                        "INSERT INTO url_mapping(short_code, original_url, expires_at, user_id) "
+                        "VALUES($1, $2, NOW() + $3::interval, $4) "
+                        "RETURNING short_code",
+                        currentShortCode,
+                        longUrl,
+                        ttlInterval,
+                        *userId
+                    );
+                    if (!result.empty()) {
+                        LOG_INFO << "Successfully saved short code: " << currentShortCode;
+                        return currentShortCode;
+                    }
+                } else {
+                    auto result = client->execSqlSync(
+                        "INSERT INTO url_mapping(short_code, original_url, expires_at) "
+                        "VALUES($1, $2, NOW() + $3::interval) "
+                        "RETURNING short_code",
+                        currentShortCode,
+                        longUrl,
+                        ttlInterval
+                    );
 
-                if (!result.empty()) {
-                    LOG_INFO << "Successfully saved short code: " << currentShortCode;
-                    return currentShortCode;
+                    if (!result.empty()) {
+                        LOG_INFO << "Successfully saved short code: " << currentShortCode;
+                        return currentShortCode;
+                    }
                 }
             } else {
-                auto result = client->execSqlSync(
-                    "INSERT INTO url_mapping(short_code, original_url) "
-                    "VALUES($1, $2) "
-                    "RETURNING short_code",
-                    currentShortCode,
-                    longUrl
-                );
+                if (userId) {
+                    auto result = client->execSqlSync(
+                        "INSERT INTO url_mapping(short_code, original_url, user_id) "
+                        "VALUES($1, $2, $3) "
+                        "RETURNING short_code",
+                        currentShortCode,
+                        longUrl,
+                        *userId
+                    );
 
-                if (!result.empty()) {
-                    LOG_INFO << "Successfully saved short code: " << currentShortCode;
-                    return currentShortCode;
+                    if (!result.empty()) {
+                        LOG_INFO << "Successfully saved short code: " << currentShortCode;
+                        return currentShortCode;
+                    }
+                } else {
+                    auto result = client->execSqlSync(
+                        "INSERT INTO url_mapping(short_code, original_url) "
+                        "VALUES($1, $2) "
+                        "RETURNING short_code",
+                        currentShortCode,
+                        longUrl
+                    );
+
+                    if (!result.empty()) {
+                        LOG_INFO << "Successfully saved short code: " << currentShortCode;
+                        return currentShortCode;
+                    }
                 }
             }
 

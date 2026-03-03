@@ -3,7 +3,7 @@ import { shortenUrl } from "../api";
 import AnalyticsPanel from "./AnalyticsPanel";
 import "./ShortenForm.css";
 
-export default function ShortenForm() {
+export default function ShortenForm({ onUnauthorized }) {
     const [longUrl, setLongUrl] = useState("");
     const [shortUrl, setShortUrl] = useState("");
     const [loading, setLoading] = useState(false);
@@ -23,6 +23,10 @@ export default function ShortenForm() {
             const data = await shortenUrl(longUrl);
             setShortUrl(data.shortUrl);
         } catch (err) {
+            if (err?.status === 401 && typeof onUnauthorized === "function") {
+                onUnauthorized();
+                return;
+            }
             setError(err.message || "Failed to shorten URL. Please try again.");
         } finally {
             setLoading(false);

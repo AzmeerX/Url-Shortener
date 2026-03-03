@@ -1,4 +1,5 @@
 #include "UrlController.h"
+#include "models/AuthModel.h"
 #include "models/UrlModel.h"
 #include <iostream>
 #include <cstdint>
@@ -37,6 +38,25 @@ namespace {
 // POST /shorten
 void UrlController::shortenUrl(const HttpRequestPtr& req, function<void (const HttpResponsePtr &)> &&callback)
 {
+    auto authHeader = req->getHeader("Authorization");
+    if (authHeader.empty() || authHeader.find("Bearer ") != 0) {
+        auto resp = HttpResponse::newHttpResponse();
+        resp->setStatusCode(k401Unauthorized);
+        resp->setBody("Unauthorized");
+        callback(resp);
+        return;
+    }
+
+    string authError;
+    auto userId = AuthModel::verifyToken(authHeader.substr(7), &authError);
+    if (!userId) {
+        auto resp = HttpResponse::newHttpResponse();
+        resp->setStatusCode(k401Unauthorized);
+        resp->setBody(authError.empty() ? "Unauthorized" : authError);
+        callback(resp);
+        return;
+    }
+
     auto clientIp = req->peerAddr().toIp();
     auto redis = app().getRedisClient();
 
@@ -173,8 +193,7 @@ void UrlController::shortenUrl(const HttpRequestPtr& req, function<void (const H
     }
 
     string shortCode = UrlModel::generateShortCode(longUrl);
-
-    auto savedShortCode = UrlModel::saveUrlMapping(shortCode, longUrl, ttlSeconds);
+    auto savedShortCode = UrlModel::saveUrlMapping(shortCode, longUrl, ttlSeconds, userId);
     if (!savedShortCode)
     {
         auto resp = HttpResponse::newHttpResponse();
