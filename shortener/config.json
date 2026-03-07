@@ -107,7 +107,7 @@
         {
             "name": "default",
             "rdbms": "postgresql",
-            "host": "127.0.0.1",
+            "host": "postgres",
             "port": 5432,
             "dbname": "url_shortener",
             "user": "url_user",
@@ -119,7 +119,7 @@
     "redis_clients": [
         {
             "name": "default",
-            "host": "127.0.0.1",
+            "host": "redis",
             "port": 6379,
             "number_of_connections": 5
         }
