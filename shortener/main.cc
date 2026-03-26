@@ -1,5 +1,35 @@
 #include <drogon/drogon.h>
+#include <cstdlib>
+#include <fstream>
+#include <json/json.h>
 using namespace drogon;
+
+static bool hasEnv(const char *key) {
+    const char *value = std::getenv(key);
+    return value && *value;
+}
+
+static std::string getEnv(const char *key) {
+    const char *value = std::getenv(key);
+    return value ? std::string(value) : std::string();
+}
+
+static void overrideString(Json::Value &node, const char *key) {
+    if (hasEnv(key)) {
+        node = getEnv(key);
+    }
+}
+
+static void overrideInt(Json::Value &node, const char *key) {
+    if (!hasEnv(key)) {
+        return;
+    }
+    try {
+        node = std::stoi(getEnv(key));
+    } catch (...) {
+        // Ignore invalid values and keep existing config.
+    }
+}
 
 int main(int argc, char* argv[]) {
     std::string configFile = "config.json";
@@ -11,7 +41,61 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    drogon::app().loadConfigFile(configFile);
+    Json::Value config;
+    {
+        std::ifstream input(configFile);
+        if (!input.good()) {
+            std::cerr << "Failed to open config file: " << configFile << std::endl;
+            return 1;
+        }
+        Json::CharReaderBuilder builder;
+        std::string errors;
+        if (!Json::parseFromStream(builder, input, &config, &errors)) {
+            std::cerr << "Failed to parse config file: " << errors << std::endl;
+            return 1;
+        }
+    }
+
+    // Ensure db_clients[0] exists.
+    if (!config.isMember("db_clients") || !config["db_clients"].isArray() ||
+        config["db_clients"].empty()) {
+        config["db_clients"] = Json::arrayValue;
+        config["db_clients"].append(Json::Value(Json::objectValue));
+    }
+    Json::Value &db = config["db_clients"][0];
+    overrideString(db["host"], "DB_HOST");
+    overrideInt(db["port"], "DB_PORT");
+    overrideString(db["dbname"], "DB_NAME");
+    overrideString(db["user"], "DB_USER");
+    overrideString(db["password"], "DB_PASS");
+    if (hasEnv("DB_SSLMODE") || hasEnv("DB_CHANNEL_BINDING")) {
+        Json::Value &opts = db["connect_options"];
+        if (!opts.isObject()) {
+            opts = Json::objectValue;
+        }
+        overrideString(opts["sslmode"], "DB_SSLMODE");
+        overrideString(opts["channel_binding"], "DB_CHANNEL_BINDING");
+    }
+
+    // Ensure redis_clients[0] exists.
+    if (!config.isMember("redis_clients") || !config["redis_clients"].isArray() ||
+        config["redis_clients"].empty()) {
+        config["redis_clients"] = Json::arrayValue;
+        config["redis_clients"].append(Json::Value(Json::objectValue));
+    }
+    Json::Value &redis = config["redis_clients"][0];
+    overrideString(redis["host"], "REDIS_HOST");
+    overrideInt(redis["port"], "REDIS_PORT");
+    overrideString(redis["username"], "REDIS_USER");
+    overrideString(redis["passwd"], "REDIS_PASS");
+
+    const std::string resolvedConfig = "/tmp/shortener_config.json";
+    {
+        std::ofstream output(resolvedConfig);
+        output << config.toStyledString();
+    }
+
+    drogon::app().loadConfigFile(resolvedConfig);
     
     //Set HTTP listener address and port
     drogon::app().addListener("0.0.0.0", 5555);

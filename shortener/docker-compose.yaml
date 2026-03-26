@@ -78,8 +78,7 @@ services:
       - --storage.tsdb.path=/prometheus
       - --web.enable-lifecycle
     volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
+      - ./monitoring/prometheus:/etc/prometheus:ro
     ports:
       - "9090:9090"
     depends_on:

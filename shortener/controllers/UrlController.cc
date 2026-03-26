@@ -82,7 +82,7 @@ void UrlController::shortenUrl(const HttpRequestPtr& req, function<void (const H
     }
 
     // Block if exceeded
-    if (requestCount > 50) {
+    if (requestCount > 60) {
         auto resp = HttpResponse::newHttpResponse();
         resp->setStatusCode(k429TooManyRequests);
         resp->setBody("Rate limit exceeded. Try again later.");
