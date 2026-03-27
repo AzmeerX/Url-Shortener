@@ -108,14 +108,17 @@ int main(int argc, char* argv[]) {
     }
     drogon::app().addListener("0.0.0.0", listenPort);
 
+    const std::string frontendOrigin = hasEnv("FRONTEND_ORIGIN") ? getEnv("FRONTEND_ORIGIN") : std::string();
+
     drogon::app()
-        .registerPreRoutingAdvice([](const drogon::HttpRequestPtr &req,
+        .registerPreRoutingAdvice([frontendOrigin](const drogon::HttpRequestPtr &req,
                                      drogon::FilterCallback &&stop,
                                      drogon::FilterChainCallback &&pass) {
             if (req->method() == drogon::Options) {
                 auto resp = drogon::HttpResponse::newHttpResponse();
                 auto origin = req->getHeader("Origin");
-                if (origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173") {
+                if (origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173" ||
+                    (!frontendOrigin.empty() && origin == frontendOrigin)) {
                     resp->addHeader("Access-Control-Allow-Origin", origin);
                 }
                 resp->addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
@@ -126,9 +129,10 @@ int main(int argc, char* argv[]) {
             }
             pass();
         })
-        .registerPostHandlingAdvice([](const drogon::HttpRequestPtr &req, const drogon::HttpResponsePtr &resp) {
+        .registerPostHandlingAdvice([frontendOrigin](const drogon::HttpRequestPtr &req, const drogon::HttpResponsePtr &resp) {
             auto origin = req->getHeader("Origin");
-            if (origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173") {
+            if (origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173" ||
+                (!frontendOrigin.empty() && origin == frontendOrigin)) {
                 resp->addHeader("Access-Control-Allow-Origin", origin);
             }
             resp->addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
