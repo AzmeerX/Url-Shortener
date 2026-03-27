@@ -97,8 +97,16 @@ int main(int argc, char* argv[]) {
 
     drogon::app().loadConfigFile(resolvedConfig);
     
-    //Set HTTP listener address and port
-    drogon::app().addListener("0.0.0.0", 5555);
+    // Set HTTP listener address and port (Render provides PORT).
+    int listenPort = 5555;
+    if (hasEnv("PORT")) {
+        try {
+            listenPort = std::stoi(getEnv("PORT"));
+        } catch (...) {
+            listenPort = 5555;
+        }
+    }
+    drogon::app().addListener("0.0.0.0", listenPort);
 
     drogon::app()
         .registerPreRoutingAdvice([](const drogon::HttpRequestPtr &req,
