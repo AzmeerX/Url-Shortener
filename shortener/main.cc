@@ -74,7 +74,8 @@ int main(int argc, char* argv[]) {
             opts = Json::objectValue;
         }
         overrideString(opts["sslmode"], "DB_SSLMODE");
-        overrideString(opts["channel_binding"], "DB_CHANNEL_BINDING");
+        // Channel binding may not be supported by libpq - skip it for now
+        // overrideString(opts["channel_binding"], "DB_CHANNEL_BINDING");
     }
 
     // Ensure redis_clients[0] exists.
