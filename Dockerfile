@@ -30,7 +30,7 @@ WORKDIR /app
 COPY shortener/ .
 
 # Build project
-RUN mkdir build && cd build && cmake .. && make
+RUN rm -rf build && mkdir build && cd build && cmake .. && make
 
 # Run server
 CMD ["./build/shortener"]
