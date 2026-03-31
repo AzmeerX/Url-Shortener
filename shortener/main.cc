@@ -95,6 +95,11 @@ int main(int argc, char* argv[]) {
         output << config.toStyledString();
     }
 
+    // DEBUG: Print resolved config to stderr
+    std::cerr << "=== RESOLVED CONFIG ===" << std::endl;
+    std::cerr << config.toStyledString() << std::endl;
+    std::cerr << "=====================" << std::endl;
+
     drogon::app().loadConfigFile(resolvedConfig);
     
     // Set HTTP listener address and port (Render provides PORT).
