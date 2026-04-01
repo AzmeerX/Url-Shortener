@@ -63,11 +63,17 @@ int main(int argc, char* argv[]) {
         config["db_clients"].append(Json::Value(Json::objectValue));
     }
     Json::Value &db = config["db_clients"][0];
+    // Support both custom env vars and Railway/Render defaults
     overrideString(db["host"], "DB_HOST");
+    if (!hasEnv("DB_HOST")) overrideString(db["host"], "PGHOST");
     overrideInt(db["port"], "DB_PORT");
+    if (!hasEnv("DB_PORT")) overrideInt(db["port"], "PGPORT");
     overrideString(db["dbname"], "DB_NAME");
+    if (!hasEnv("DB_NAME")) overrideString(db["dbname"], "POSTGRES_DB");
     overrideString(db["user"], "DB_USER");
+    if (!hasEnv("DB_USER")) overrideString(db["user"], "PGUSER");
     overrideString(db["password"], "DB_PASS");
+    if (!hasEnv("DB_PASS")) overrideString(db["password"], "PGPASSWORD");
     if (hasEnv("DB_SSLMODE") || hasEnv("DB_CHANNEL_BINDING")) {
         Json::Value &opts = db["connect_options"];
         if (!opts.isObject()) {
@@ -85,10 +91,15 @@ int main(int argc, char* argv[]) {
         config["redis_clients"].append(Json::Value(Json::objectValue));
     }
     Json::Value &redis = config["redis_clients"][0];
+    // Support both custom env vars and Railway/Render defaults
     overrideString(redis["host"], "REDIS_HOST");
+    if (!hasEnv("REDIS_HOST")) overrideString(redis["host"], "REDISHOST");
     overrideInt(redis["port"], "REDIS_PORT");
+    if (!hasEnv("REDIS_PORT")) overrideInt(redis["port"], "REDISPORT");
     overrideString(redis["username"], "REDIS_USER");
+    if (!hasEnv("REDIS_USER")) overrideString(redis["username"], "REDISUSER");
     overrideString(redis["passwd"], "REDIS_PASS");
+    if (!hasEnv("REDIS_PASS")) overrideString(redis["passwd"], "REDIS_PASSWORD");
 
     const std::string resolvedConfig = "/tmp/shortener_config.json";
     {
