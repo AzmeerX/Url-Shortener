@@ -116,13 +116,6 @@
             "number_of_connections": 5
         }
     ],
-    "redis_clients": [
-        {
-            "name": "default",
-            "host": "redis",
-            "port": 6379,
-            "number_of_connections": 5
-        }
-    ],
+    "redis_clients": [],
     "custom_config": {}
 }
