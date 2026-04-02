@@ -1,4 +1,5 @@
 #include <drogon/drogon.h>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <json/json.h>
@@ -29,6 +30,129 @@ static void overrideInt(Json::Value &node, const char *key) {
     } catch (...) {
         // Ignore invalid values and keep existing config.
     }
+}
+
+struct RedisUrlParts {
+    std::string host;
+    int port = -1;
+    std::string username;
+    std::string password;
+    int db = -1;
+    bool ok = false;
+};
+
+static int hexValue(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+static std::string urlDecode(const std::string &in) {
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        if (in[i] == '%' && i + 2 < in.size()) {
+            int hi = hexValue(in[i + 1]);
+            int lo = hexValue(in[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(in[i]);
+    }
+    return out;
+}
+
+static bool parseRedisUrl(const std::string &url, RedisUrlParts &out) {
+    auto schemePos = url.find("://");
+    if (schemePos == std::string::npos) {
+        return false;
+    }
+    std::string rest = url.substr(schemePos + 3);
+    auto queryPos = rest.find('?');
+    if (queryPos != std::string::npos) {
+        rest = rest.substr(0, queryPos);
+    }
+
+    std::string hostPart = rest;
+    std::string pathPart;
+    auto slashPos = rest.find('/');
+    if (slashPos != std::string::npos) {
+        hostPart = rest.substr(0, slashPos);
+        pathPart = rest.substr(slashPos + 1);
+    }
+
+    std::string authPart;
+    std::string hostPortPart = hostPart;
+    auto atPos = hostPart.rfind('@');
+    if (atPos != std::string::npos) {
+        authPart = hostPart.substr(0, atPos);
+        hostPortPart = hostPart.substr(atPos + 1);
+    }
+
+    if (!authPart.empty()) {
+        auto colonPos = authPart.find(':');
+        if (colonPos != std::string::npos) {
+            out.username = urlDecode(authPart.substr(0, colonPos));
+            out.password = urlDecode(authPart.substr(colonPos + 1));
+        } else {
+            out.username = urlDecode(authPart);
+        }
+    }
+
+    if (hostPortPart.empty()) {
+        return false;
+    }
+
+    if (hostPortPart.front() == '[') {
+        auto end = hostPortPart.find(']');
+        if (end == std::string::npos) {
+            return false;
+        }
+        out.host = hostPortPart.substr(1, end - 1);
+        if (end + 1 < hostPortPart.size() && hostPortPart[end + 1] == ':') {
+            try {
+                out.port = std::stoi(hostPortPart.substr(end + 2));
+            } catch (...) {
+                out.port = -1;
+            }
+        }
+    } else {
+        auto colonPos = hostPortPart.rfind(':');
+        if (colonPos != std::string::npos && hostPortPart.find(':') == colonPos) {
+            out.host = hostPortPart.substr(0, colonPos);
+            try {
+                out.port = std::stoi(hostPortPart.substr(colonPos + 1));
+            } catch (...) {
+                out.port = -1;
+            }
+        } else {
+            out.host = hostPortPart;
+        }
+    }
+
+    if (!pathPart.empty()) {
+        bool allDigits = true;
+        for (char c : pathPart) {
+            if (!std::isdigit(static_cast<unsigned char>(c))) {
+                allDigits = false;
+                break;
+            }
+        }
+        if (allDigits) {
+            try {
+                out.db = std::stoi(pathPart);
+            } catch (...) {
+                out.db = -1;
+            }
+        }
+    }
+
+    out.ok = !out.host.empty();
+    return out.ok;
 }
 
 int main(int argc, char* argv[]) {
@@ -91,13 +215,76 @@ int main(int argc, char* argv[]) {
         config["redis_clients"].append(Json::Value(Json::objectValue));
     }
     Json::Value &redis = config["redis_clients"][0];
+    // DEBUG: Print which redis env vars are visible (no secrets).
+    std::cerr << "=== REDIS ENV ===" << std::endl;
+    std::cerr << "REDIS_URL: " << (hasEnv("REDIS_URL") ? "set" : "not set") << std::endl;
+    std::cerr << "REDIS_PUBLIC_URL: " << (hasEnv("REDIS_PUBLIC_URL") ? "set" : "not set") << std::endl;
+    if (hasEnv("REDIS_HOST")) {
+        std::cerr << "REDIS_HOST: " << getEnv("REDIS_HOST") << std::endl;
+    } else {
+        std::cerr << "REDIS_HOST: not set" << std::endl;
+    }
+    if (hasEnv("REDISHOST")) {
+        std::cerr << "REDISHOST: " << getEnv("REDISHOST") << std::endl;
+    } else {
+        std::cerr << "REDISHOST: not set" << std::endl;
+    }
+    if (hasEnv("REDIS_PORT")) {
+        std::cerr << "REDIS_PORT: " << getEnv("REDIS_PORT") << std::endl;
+    } else if (hasEnv("REDISPORT")) {
+        std::cerr << "REDISPORT: " << getEnv("REDISPORT") << std::endl;
+    } else {
+        std::cerr << "REDIS_PORT: not set" << std::endl;
+    }
+    std::cerr << "REDIS_USER: " << (hasEnv("REDIS_USER") ? getEnv("REDIS_USER") : "not set") << std::endl;
+    if (!hasEnv("REDIS_USER")) {
+        std::cerr << "REDIS_USERNAME: " << (hasEnv("REDIS_USERNAME") ? getEnv("REDIS_USERNAME") : "not set") << std::endl;
+    }
+    std::cerr << "REDIS_PASSWORD: " << (hasEnv("REDIS_PASSWORD") ? "set" : "not set") << std::endl;
+    std::cerr << "=================" << std::endl;
     // Support both custom env vars and Railway/Render defaults
+    if (hasEnv("REDIS_URL")) {
+        RedisUrlParts parts;
+        if (parseRedisUrl(getEnv("REDIS_URL"), parts)) {
+            redis["host"] = parts.host;
+            if (parts.port > 0) {
+                redis["port"] = parts.port;
+            }
+            if (!parts.username.empty()) {
+                redis["username"] = parts.username;
+            }
+            if (!parts.password.empty()) {
+                redis["passwd"] = parts.password;
+            }
+            if (parts.db >= 0) {
+                redis["db"] = parts.db;
+            }
+        }
+    } else if (hasEnv("REDIS_PUBLIC_URL")) {
+        RedisUrlParts parts;
+        if (parseRedisUrl(getEnv("REDIS_PUBLIC_URL"), parts)) {
+            redis["host"] = parts.host;
+            if (parts.port > 0) {
+                redis["port"] = parts.port;
+            }
+            if (!parts.username.empty()) {
+                redis["username"] = parts.username;
+            }
+            if (!parts.password.empty()) {
+                redis["passwd"] = parts.password;
+            }
+            if (parts.db >= 0) {
+                redis["db"] = parts.db;
+            }
+        }
+    }
     overrideString(redis["host"], "REDIS_HOST");
     if (!hasEnv("REDIS_HOST")) overrideString(redis["host"], "REDISHOST");
     overrideInt(redis["port"], "REDIS_PORT");
     if (!hasEnv("REDIS_PORT")) overrideInt(redis["port"], "REDISPORT");
     overrideString(redis["username"], "REDIS_USER");
-    if (!hasEnv("REDIS_USER")) overrideString(redis["username"], "REDISUSER");
+    if (!hasEnv("REDIS_USER")) overrideString(redis["username"], "REDIS_USERNAME");
+    if (!hasEnv("REDIS_USER") && !hasEnv("REDIS_USERNAME")) overrideString(redis["username"], "REDISUSER");
     overrideString(redis["passwd"], "REDIS_PASS");
     if (!hasEnv("REDIS_PASS")) overrideString(redis["passwd"], "REDIS_PASSWORD");
 
