@@ -114,11 +114,6 @@ int main(int argc, char* argv[]) {
         output << config.toStyledString();
     }
 
-    // DEBUG: Print resolved config to stderr
-    std::cerr << "=== RESOLVED CONFIG ===" << std::endl;
-    std::cerr << config.toStyledString() << std::endl;
-    std::cerr << "=====================" << std::endl;
-
     drogon::app().loadConfigFile(resolvedConfig);
     
     // Set HTTP listener address and port (Render provides PORT).
@@ -138,11 +133,16 @@ int main(int argc, char* argv[]) {
         .registerPreRoutingAdvice([frontendOrigin](const drogon::HttpRequestPtr &req,
                                      drogon::FilterCallback &&stop,
                                      drogon::FilterChainCallback &&pass) {
+            auto origin = req->getHeader("Origin");
+            auto resp = drogon::HttpResponse::newHttpResponse();
+            
+            // Check if origin is allowed
+            bool originAllowed = origin == "http://localhost:5173" || 
+                                origin == "http://127.0.0.1:5173" ||
+                                origin == frontendOrigin;
+            
             if (req->method() == drogon::Options) {
-                auto resp = drogon::HttpResponse::newHttpResponse();
-                auto origin = req->getHeader("Origin");
-                if (origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173" ||
-                    (!frontendOrigin.empty() && origin == frontendOrigin)) {
+                if (originAllowed) {
                     resp->addHeader("Access-Control-Allow-Origin", origin);
                 }
                 resp->addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
@@ -155,8 +155,11 @@ int main(int argc, char* argv[]) {
         })
         .registerPostHandlingAdvice([frontendOrigin](const drogon::HttpRequestPtr &req, const drogon::HttpResponsePtr &resp) {
             auto origin = req->getHeader("Origin");
-            if (origin == "http://localhost:5173" || origin == "http://127.0.0.1:5173" ||
-                (!frontendOrigin.empty() && origin == frontendOrigin)) {
+            bool originAllowed = origin == "http://localhost:5173" || 
+                                origin == "http://127.0.0.1:5173" ||
+                                origin == frontendOrigin;
+            
+            if (originAllowed) {
                 resp->addHeader("Access-Control-Allow-Origin", origin);
             }
             resp->addHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
