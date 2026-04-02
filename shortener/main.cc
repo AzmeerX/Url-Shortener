@@ -107,6 +107,17 @@ int main(int argc, char* argv[]) {
         output << config.toStyledString();
     }
 
+    // DEBUG: Print resolved config to stderr
+    std::cerr << "=== REDIS CONFIG ===" << std::endl;
+    if (config.isMember("redis_clients") && config["redis_clients"].isArray() && config["redis_clients"].size() > 0) {
+        std::cerr << "Redis host: " << config["redis_clients"][0]["host"].asString() << std::endl;
+        std::cerr << "Redis port: " << config["redis_clients"][0]["port"].asInt() << std::endl;
+        std::cerr << "Redis user: " << config["redis_clients"][0]["username"].asString() << std::endl;
+    } else {
+        std::cerr << "No redis clients configured!" << std::endl;
+    }
+    std::cerr << "=====================" << std::endl;
+
     drogon::app().loadConfigFile(resolvedConfig);
     
     // Set HTTP listener address and port (Render provides PORT).
