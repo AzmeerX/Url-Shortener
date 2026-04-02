@@ -85,8 +85,6 @@ int main(int argc, char* argv[]) {
     }
 
     // Ensure redis_clients[0] exists.
-    // DISABLED: We don't use Redis, so disable it to avoid connection errors
-    /*
     if (!config.isMember("redis_clients") || !config["redis_clients"].isArray() ||
         config["redis_clients"].empty()) {
         config["redis_clients"] = Json::arrayValue;
@@ -102,11 +100,6 @@ int main(int argc, char* argv[]) {
     if (!hasEnv("REDIS_USER")) overrideString(redis["username"], "REDISUSER");
     overrideString(redis["passwd"], "REDIS_PASS");
     if (!hasEnv("REDIS_PASS")) overrideString(redis["passwd"], "REDIS_PASSWORD");
-    */
-    // Ensure redis_clients is empty
-    if (!config.isMember("redis_clients")) {
-        config["redis_clients"] = Json::arrayValue;
-    }
 
     const std::string resolvedConfig = "/tmp/shortener_config.json";
     {
