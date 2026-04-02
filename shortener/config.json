@@ -116,6 +116,15 @@
             "number_of_connections": 5
         }
     ],
-    "redis_clients": [],
+    "redis_clients": [
+        {
+            "name": "default",
+            "host": "redis.railway.internal",
+            "port": 6379,
+            "username": "default",
+            "passwd": "",
+            "number_of_connections": 5
+        }
+    ],
     "custom_config": {}
 }
