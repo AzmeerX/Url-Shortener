@@ -66,6 +66,18 @@ static std::string urlDecode(const std::string &in) {
     return out;
 }
 
+static std::string trimCopy(const std::string &in) {
+    size_t start = 0;
+    while (start < in.size() && std::isspace(static_cast<unsigned char>(in[start]))) {
+        ++start;
+    }
+    size_t end = in.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(in[end - 1]))) {
+        --end;
+    }
+    return in.substr(start, end - start);
+}
+
 static bool parseRedisUrl(const std::string &url, RedisUrlParts &out) {
     auto schemePos = url.find("://");
     if (schemePos == std::string::npos) {
@@ -148,6 +160,67 @@ static bool parseRedisUrl(const std::string &url, RedisUrlParts &out) {
             } catch (...) {
                 out.db = -1;
             }
+        }
+    }
+
+    out.ok = !out.host.empty();
+    return out.ok;
+}
+
+static bool parseRedisUrlAny(const std::string &url, RedisUrlParts &out) {
+    std::string cleaned = trimCopy(url);
+    if (cleaned.size() >= 2 &&
+        ((cleaned.front() == '"' && cleaned.back() == '"') ||
+         (cleaned.front() == '\'' && cleaned.back() == '\''))) {
+        cleaned = cleaned.substr(1, cleaned.size() - 2);
+    }
+
+    if (parseRedisUrl(cleaned, out)) {
+        return true;
+    }
+
+    // Fallback: very tolerant parsing to extract host/port.
+    std::string work = cleaned;
+    auto schemePos = work.find("://");
+    if (schemePos != std::string::npos) {
+        work = work.substr(schemePos + 3);
+    }
+    auto atPos = work.rfind('@');
+    if (atPos != std::string::npos) {
+        work = work.substr(atPos + 1);
+    }
+    auto slashPos = work.find('/');
+    if (slashPos != std::string::npos) {
+        work = work.substr(0, slashPos);
+    }
+    if (work.empty()) {
+        return false;
+    }
+
+    if (work.front() == '[') {
+        auto end = work.find(']');
+        if (end == std::string::npos) {
+            return false;
+        }
+        out.host = work.substr(1, end - 1);
+        if (end + 1 < work.size() && work[end + 1] == ':') {
+            try {
+                out.port = std::stoi(work.substr(end + 2));
+            } catch (...) {
+                out.port = -1;
+            }
+        }
+    } else {
+        auto colonPos = work.rfind(':');
+        if (colonPos != std::string::npos) {
+            out.host = work.substr(0, colonPos);
+            try {
+                out.port = std::stoi(work.substr(colonPos + 1));
+            } catch (...) {
+                out.port = -1;
+            }
+        } else {
+            out.host = work;
         }
     }
 
@@ -245,7 +318,7 @@ int main(int argc, char* argv[]) {
     // Support both custom env vars and Railway/Render defaults
     if (hasEnv("REDIS_URL")) {
         RedisUrlParts parts;
-        if (parseRedisUrl(getEnv("REDIS_URL"), parts)) {
+        if (parseRedisUrlAny(getEnv("REDIS_URL"), parts)) {
             redis["host"] = parts.host;
             if (parts.port > 0) {
                 redis["port"] = parts.port;
@@ -259,10 +332,13 @@ int main(int argc, char* argv[]) {
             if (parts.db >= 0) {
                 redis["db"] = parts.db;
             }
+            std::cerr << "REDIS_URL parsed host: " << parts.host << " port: " << (parts.port > 0 ? parts.port : redis["port"].asInt()) << std::endl;
+        } else {
+            std::cerr << "REDIS_URL parse failed" << std::endl;
         }
     } else if (hasEnv("REDIS_PUBLIC_URL")) {
         RedisUrlParts parts;
-        if (parseRedisUrl(getEnv("REDIS_PUBLIC_URL"), parts)) {
+        if (parseRedisUrlAny(getEnv("REDIS_PUBLIC_URL"), parts)) {
             redis["host"] = parts.host;
             if (parts.port > 0) {
                 redis["port"] = parts.port;
@@ -276,6 +352,9 @@ int main(int argc, char* argv[]) {
             if (parts.db >= 0) {
                 redis["db"] = parts.db;
             }
+            std::cerr << "REDIS_PUBLIC_URL parsed host: " << parts.host << " port: " << (parts.port > 0 ? parts.port : redis["port"].asInt()) << std::endl;
+        } else {
+            std::cerr << "REDIS_PUBLIC_URL parse failed" << std::endl;
         }
     }
     overrideString(redis["host"], "REDIS_HOST");
